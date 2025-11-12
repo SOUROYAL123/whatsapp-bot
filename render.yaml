@@ -1,0 +1,43 @@
+# Render.com Blueprint Configuration
+# This file configures automatic deployment on Render
+
+services:
+  # Web Service - Node.js Application
+  - type: web
+    name: whatsapp-ai-chatbot
+    env: node
+    plan: free  # Start with free tier
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: AI_PROVIDER
+        value: openai
+      - key: OPENAI_MODEL
+        value: gpt-3.5-turbo
+      - key: DEFAULT_LANGUAGE
+        value: en
+      - key: ENABLE_BENGALI
+        value: true
+      - key: RATE_LIMIT
+        value: 50
+    # Add your secrets in Render Dashboard:
+    # - TWILIO_ACCOUNT_SID
+    # - TWILIO_AUTH_TOKEN
+    # - TWILIO_WHATSAPP_NUMBER
+    # - OPENAI_API_KEY
+    # - ANTHROPIC_API_KEY (optional)
+    # - BUSINESS_NAME
+    # - DATABASE_URL (auto-populated if you add PostgreSQL)
+
+databases:
+  # PostgreSQL Database
+  - name: chatbot-db
+    databaseName: chatbot
+    user: chatbot
+    plan: free  # Free PostgreSQL tier
+    # Render will automatically create DATABASE_URL and inject it
