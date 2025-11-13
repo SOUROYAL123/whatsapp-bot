@@ -46,18 +46,19 @@ async function createTables() {
   `;
 
   const createMessagesTable = `
-    CREATE TABLE IF NOT EXISTS messages (
-      id SERIAL PRIMARY KEY,
-      phone_number VARCHAR(50) NOT NULL,
-      message TEXT NOT NULL,
-      sender VARCHAR(20) NOT NULL,
-      client_id VARCHAR(100) DEFAULT 'default',
-      language VARCHAR(10) DEFAULT 'en',
-      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_phone_client (phone_number, client_id),
-      INDEX idx_timestamp (timestamp)
-    );
-  `;
+  CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    phone_number VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    sender VARCHAR(20) NOT NULL,
+    client_id VARCHAR(100) DEFAULT 'default',
+    language VARCHAR(10) DEFAULT 'en',
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_phone_client ON messages(phone_number, client_id);
+  CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
+`;
 
   try {
     await pool.query(createClientsTable);
