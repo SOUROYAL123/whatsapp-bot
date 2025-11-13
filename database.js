@@ -1,115 +1,149 @@
 /**
- * AI MODULE - Google Gemini (WORKING VERSION)
+ * DATABASE MODULE - PostgreSQL (FIXED)
  */
 
-const axios = require('axios');
+const { Pool } = require('pg');
 
-// Detect language
-function detectLanguage(message) {
-  const bengaliRegex = /[\u0980-\u09FF]/;
-  return bengaliRegex.test(message) ? 'bn' : 'en';
-}
+let pool = null;
 
-// System prompts
-const SYSTEM_PROMPTS = {
-  en: `You are a helpful WhatsApp assistant for {BUSINESS_NAME}. Answer questions about products and services. Keep responses short (2-3 sentences) since this is WhatsApp. Be friendly and professional.`,
-  bn: `আপনি {BUSINESS_NAME} এর একজন সহায়ক WhatsApp সহায়ক। পণ্য এবং সেবা সম্পর্কে প্রশ্নের উত্তর দিন। যেহেতু এটি WhatsApp, উত্তর সংক্ষিপ্ত রাখুন (২-৩ বাক্য)। বন্ধুত্বপূর্ণ এবং পেশাদার হন।`
-};
+async function initDatabase() {
+  const databaseUrl = process.env.DATABASE_URL;
 
-/**
- * Get AI Response from Google Gemini
- */
-async function getAIResponse(userMessage, conversationHistory = [], clientConfig = {}) {
+  if (!databaseUrl) {
+    console.error('❌ DATABASE_URL not configured!');
+    throw new Error('DATABASE_URL required');
+  }
+
+  pool = new Pool({
+    connectionString: databaseUrl,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  });
+
+  // Test connection
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY not configured');
-    }
-
-    const language = detectLanguage(userMessage);
-    const businessName = clientConfig.business_name || process.env.BUSINESS_NAME || 'our business';
-    let systemPrompt = clientConfig.ai_instructions || SYSTEM_PROMPTS[language] || SYSTEM_PROMPTS.en;
-    systemPrompt = systemPrompt.replace('{BUSINESS_NAME}', businessName);
-
-    console.log(`🤖 Calling Google Gemini API...`);
-
-    // Build prompt
-    let fullPrompt = `${systemPrompt}\n\n`;
-    
-    if (conversationHistory.length > 0) {
-      fullPrompt += 'Recent conversation:\n';
-      conversationHistory.forEach(msg => {
-        fullPrompt += `${msg.sender === 'user' ? 'User' : 'Assistant'}: ${msg.message}\n`;
-      });
-      fullPrompt += '\n';
-    }
-    
-    fullPrompt += `User: ${userMessage}\nAssistant:`;
-
-    // CORRECT API CALL - v1 endpoint with gemini-1.5-flash
-    const response = await axios.post(
-      'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=' + apiKey,
-      {
-        contents: [{
-          parts: [{ text: fullPrompt }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 500
-        }
-      },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 30000
-      }
-    );
-
-    const aiResponse = response.data.candidates[0].content.parts[0].text.trim();
-    
-    console.log(`✅ Gemini response: "${aiResponse.substring(0, 50)}..."`);
-
-    return {
-      success: true,
-      response: aiResponse,
-      language: language,
-      provider: 'gemini'
-    };
-
+    const client = await pool.connect();
+    console.log('✅ Database connection established');
+    client.release();
   } catch (error) {
-    console.error('❌ Gemini API Error:', error.response?.data || error.message);
-    
-    const language = detectLanguage(userMessage);
-    const fallbackMessage = language === 'bn' 
-      ? 'দুঃখিত, আমি এই মুহূর্তে আপনার বার্তা প্রক্রিয়া করতে সমস্যা হচ্ছে। অনুগ্রহ করে কিছুক্ষণ পরে আবার চেষ্টা করুন।'
-      : 'Sorry, I\'m having trouble right now. Please try again in a moment.';
+    console.error('❌ Database connection failed:', error);
+    throw error;
+  }
 
-    return {
-      success: false,
-      response: fallbackMessage,
-      language: language,
-      error: error.message
-    };
+  // Create tables
+  await createTables();
+}
+
+async function createTables() {
+  const createClientsTable = `
+    CREATE TABLE IF NOT EXISTS clients (
+      client_id VARCHAR(100) PRIMARY KEY,
+      business_name VARCHAR(255) NOT NULL,
+      whatsapp_number VARCHAR(50) NOT NULL,
+      ai_instructions TEXT,
+      language VARCHAR(10) DEFAULT 'en',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  const createMessagesTable = `
+    CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      phone_number VARCHAR(50) NOT NULL,
+      message TEXT NOT NULL,
+      sender VARCHAR(20) NOT NULL,
+      client_id VARCHAR(100) DEFAULT 'default',
+      language VARCHAR(10) DEFAULT 'en',
+      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  const createIndexes = `
+    CREATE INDEX IF NOT EXISTS idx_phone_client ON messages(phone_number, client_id);
+    CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
+  `;
+
+  try {
+    await pool.query(createClientsTable);
+    await pool.query(createMessagesTable);
+    await pool.query(createIndexes);
+    console.log('✅ Database tables ready');
+  } catch (error) {
+    console.error('❌ Error creating tables:', error.message);
+    // Continue even if tables already exist
   }
 }
 
-function validateAPIConfig() {
-  const configured = !!process.env.GEMINI_API_KEY;
-  console.log('🔧 AI Configuration:');
-  console.log(`   Provider: GEMINI`);
-  console.log(`   Gemini Key: ${configured ? '✅ Configured' : '❌ Missing'}`);
-  
-  if (!configured) {
-    console.error('❌ GEMINI_API_KEY not found in environment variables!');
+async function saveMessage(phoneNumber, message, sender, clientId = 'default', language = 'en') {
+  try {
+    await pool.query(
+      'INSERT INTO messages (phone_number, message, sender, client_id, language) VALUES ($1, $2, $3, $4, $5)',
+      [phoneNumber, message, sender, clientId, language]
+    );
+  } catch (error) {
+    console.error('Error saving message:', error.message);
   }
-  
-  return configured;
+}
+
+async function getConversationHistory(phoneNumber, clientId = 'default', limit = 5) {
+  try {
+    const result = await pool.query(
+      'SELECT message, sender, timestamp FROM messages WHERE phone_number = $1 AND client_id = $2 ORDER BY timestamp DESC LIMIT $3',
+      [phoneNumber, clientId, limit]
+    );
+    return result.rows.reverse();
+  } catch (error) {
+    console.error('Error getting conversation history:', error.message);
+    return [];
+  }
+}
+
+async function addClient(clientId, businessName, whatsappNumber, aiInstructions = null, language = 'en') {
+  try {
+    await pool.query(
+      'INSERT INTO clients (client_id, business_name, whatsapp_number, ai_instructions, language) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (client_id) DO UPDATE SET business_name = $2, whatsapp_number = $3, ai_instructions = $4, language = $5',
+      [clientId, businessName, whatsappNumber, aiInstructions, language]
+    );
+    return { success: true };
+  } catch (error) {
+    console.error('Error adding client:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+async function getClient(clientId) {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM clients WHERE client_id = $1',
+      [clientId]
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Error getting client:', error.message);
+    return null;
+  }
+}
+
+async function getAllClients() {
+  try {
+    const result = await pool.query('SELECT * FROM clients ORDER BY created_at DESC');
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting clients:', error.message);
+    return [];
+  }
+}
+
+async function updateAnalytics(clientId, isIncoming) {
+  // Placeholder for analytics
+  return;
 }
 
 module.exports = {
-  getAIResponse,
-  detectLanguage,
-  validateAPIConfig
+  initDatabase,
+  saveMessage,
+  getConversationHistory,
+  addClient,
+  getClient,
+  getAllClients,
+  updateAnalytics
 };
