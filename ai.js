@@ -1,14 +1,15 @@
 /**
- * AI MODULE - Enhanced Version with OpenAI/Claude Support
+ * AI MODULE - Enhanced Version with OpenAI/Claude/Gemini Support
  * Handles AI responses with automatic fallback and multilingual support
  */
 
 const axios = require('axios');
 
 // Configuration
-const AI_PROVIDER = process.env.AI_PROVIDER || 'openai'; // 'openai' or 'anthropic'
+const AI_PROVIDER = process.env.AI_PROVIDER || 'openai'; // 'openai', 'anthropic', or 'gemini'
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
 // System prompts for different languages
 const SYSTEM_PROMPTS = {
@@ -70,6 +71,8 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       result = await getOpenAIResponse(systemPrompt, messages, language);
     } else if (AI_PROVIDER === 'anthropic' || AI_PROVIDER === 'claude') {
       result = await getClaudeResponse(systemPrompt, messages, language);
+    } else if (AI_PROVIDER === 'gemini' || AI_PROVIDER === 'google') {
+      result = await getGeminiResponse(systemPrompt, messages, language);
     } else {
       // Default to OpenAI if provider not recognized
       console.warn(`⚠️  Unknown AI provider: ${AI_PROVIDER}, falling back to OpenAI`);
@@ -90,11 +93,28 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       systemPrompt = systemPrompt.replace('{BUSINESS_NAME}', businessName);
       const messages = buildMessageHistory(conversationHistory, userMessage);
 
-      // Try alternative provider
-      if (AI_PROVIDER === 'openai' && process.env.ANTHROPIC_API_KEY) {
-        return await getClaudeResponse(systemPrompt, messages, language);
-      } else if (AI_PROVIDER === 'anthropic' && process.env.OPENAI_API_KEY) {
-        return await getOpenAIResponse(systemPrompt, messages, language);
+      // Try alternative providers in order
+      if (AI_PROVIDER === 'openai') {
+        // Try Gemini first, then Claude
+        if (process.env.GEMINI_API_KEY) {
+          return await getGeminiResponse(systemPrompt, messages, language);
+        } else if (process.env.ANTHROPIC_API_KEY) {
+          return await getClaudeResponse(systemPrompt, messages, language);
+        }
+      } else if (AI_PROVIDER === 'gemini') {
+        // Try OpenAI first, then Claude
+        if (process.env.OPENAI_API_KEY) {
+          return await getOpenAIResponse(systemPrompt, messages, language);
+        } else if (process.env.ANTHROPIC_API_KEY) {
+          return await getClaudeResponse(systemPrompt, messages, language);
+        }
+      } else if (AI_PROVIDER === 'anthropic') {
+        // Try Gemini first, then OpenAI
+        if (process.env.GEMINI_API_KEY) {
+          return await getGeminiResponse(systemPrompt, messages, language);
+        } else if (process.env.OPENAI_API_KEY) {
+          return await getOpenAIResponse(systemPrompt, messages, language);
+        }
       }
     } catch (fallbackError) {
       console.error('❌ Fallback AI also failed:', fallbackError.message);
@@ -241,6 +261,103 @@ async function getClaudeResponse(systemPrompt, messages, language) {
 }
 
 /**
+ * Get response from Google Gemini
+ */
+async function getGeminiResponse(systemPrompt, messages, language) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY not configured in environment variables');
+  }
+
+  console.log(`🤖 Calling Google Gemini API (${GEMINI_MODEL})...`);
+
+  // Gemini uses a different message format
+  // Combine system prompt with conversation
+  const geminiContents = [];
+  
+  // Add system prompt as first user message with context
+  geminiContents.push({
+    role: 'user',
+    parts: [{ text: `${systemPrompt}\n\nNow, please respond to the following conversation:` }]
+  });
+  
+  geminiContents.push({
+    role: 'model',
+    parts: [{ text: 'I understand. I will act as a helpful WhatsApp assistant for the business. How can I help?' }]
+  });
+
+  // Add conversation history
+  messages.forEach((msg, index) => {
+    geminiContents.push({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }]
+    });
+  });
+
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    {
+      contents: geminiContents,
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 500,
+      },
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+        },
+        {
+          category: 'HARM_CATEGORY_HATE_SPEECH',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+        },
+        {
+          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+        }
+      ]
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000 // 30 second timeout
+    }
+  );
+
+  // Extract response from Gemini format
+  const aiResponse = response.data.candidates[0].content.parts[0].text.trim();
+  
+  console.log(`✅ Gemini response: "${aiResponse.substring(0, 50)}..."`);
+  
+  // Gemini doesn't provide token usage in the same way, estimate it
+  const estimatedTokens = {
+    input: Math.ceil(JSON.stringify(geminiContents).length / 4),
+    output: Math.ceil(aiResponse.length / 4),
+    total: 0
+  };
+  estimatedTokens.total = estimatedTokens.input + estimatedTokens.output;
+  
+  console.log(`📊 Estimated tokens: ${estimatedTokens.total} (input: ${estimatedTokens.input}, output: ${estimatedTokens.output})`);
+
+  return {
+    success: true,
+    response: aiResponse,
+    language: language,
+    provider: 'gemini',
+    model: GEMINI_MODEL,
+    tokensUsed: estimatedTokens
+  };
+}
+
+/**
  * Get fallback message when AI fails
  */
 function getFallbackMessage(language = 'en') {
@@ -313,13 +430,15 @@ function validateAPIConfig() {
   const config = {
     provider: AI_PROVIDER,
     openaiConfigured: !!process.env.OPENAI_API_KEY,
-    claudeConfigured: !!process.env.ANTHROPIC_API_KEY
+    claudeConfigured: !!process.env.ANTHROPIC_API_KEY,
+    geminiConfigured: !!process.env.GEMINI_API_KEY
   };
 
   console.log('🔧 AI Configuration:');
   console.log(`   Provider: ${config.provider.toUpperCase()}`);
   console.log(`   OpenAI Key: ${config.openaiConfigured ? '✅ Configured' : '❌ Missing'}`);
   console.log(`   Claude Key: ${config.claudeConfigured ? '✅ Configured' : '❌ Missing'}`);
+  console.log(`   Gemini Key: ${config.geminiConfigured ? '✅ Configured' : '❌ Missing'}`);
 
   // Warn if primary provider not configured
   if (AI_PROVIDER === 'openai' && !config.openaiConfigured) {
@@ -327,6 +446,9 @@ function validateAPIConfig() {
   }
   if ((AI_PROVIDER === 'anthropic' || AI_PROVIDER === 'claude') && !config.claudeConfigured) {
     console.warn('⚠️  WARNING: Claude selected but API key not configured!');
+  }
+  if ((AI_PROVIDER === 'gemini' || AI_PROVIDER === 'google') && !config.geminiConfigured) {
+    console.warn('⚠️  WARNING: Gemini selected but API key not configured!');
   }
 
   return config;
@@ -336,11 +458,29 @@ function validateAPIConfig() {
  * Get AI provider information
  */
 function getProviderInfo() {
+  let model;
+  switch(AI_PROVIDER) {
+    case 'openai':
+      model = OPENAI_MODEL;
+      break;
+    case 'anthropic':
+    case 'claude':
+      model = CLAUDE_MODEL;
+      break;
+    case 'gemini':
+    case 'google':
+      model = GEMINI_MODEL;
+      break;
+    default:
+      model = OPENAI_MODEL;
+  }
+
   return {
     current: AI_PROVIDER,
-    model: AI_PROVIDER === 'openai' ? OPENAI_MODEL : CLAUDE_MODEL,
+    model: model,
     hasOpenAI: !!process.env.OPENAI_API_KEY,
-    hasClaude: !!process.env.ANTHROPIC_API_KEY
+    hasClaude: !!process.env.ANTHROPIC_API_KEY,
+    hasGemini: !!process.env.GEMINI_API_KEY
   };
 }
 
