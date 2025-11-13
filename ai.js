@@ -4,7 +4,7 @@
 
 const axios = require('axios');
 
-const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_MODEL = 'gemini-pro';
 
 // Detect language
 function detectLanguage(message) {
