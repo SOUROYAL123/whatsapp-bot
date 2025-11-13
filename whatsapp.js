@@ -1,173 +1,102 @@
 /**
- * WHATSAPP MODULE
- * Twilio WhatsApp API integration optimized for Render
+ * WHATSAPP MODULE - Twilio Integration
  */
 
 const twilio = require('twilio');
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const twilioWhatsAppNumber = process.env.TWILIO_WHATSAPP_NUMBER;
-
 let twilioClient = null;
 
-/**
- * Initialize Twilio client
- */
+// Rate limiting
+const messageCount = new Map();
+const RATE_LIMIT_WINDOW = 3600000; // 1 hour
+
 function initTwilio() {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+
   if (!accountSid || !authToken) {
-    console.warn('⚠️  Twilio credentials not configured');
-    return null;
+    console.error('❌ Twilio credentials missing!');
+    throw new Error('TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN required');
   }
 
-  if (!twilioWhatsAppNumber) {
-    console.warn('⚠️  TWILIO_WHATSAPP_NUMBER not configured');
-    return null;
-  }
-  
-  try {
-    twilioClient = twilio(accountSid, authToken);
-    console.log('✅ Twilio WhatsApp initialized');
-    console.log(`📱 WhatsApp number: ${twilioWhatsAppNumber}`);
-    return twilioClient;
-  } catch (error) {
-    console.error('❌ Failed to initialize Twilio:', error.message);
-    return null;
-  }
+  twilioClient = twilio(accountSid, authToken);
+  console.log('✅ Twilio WhatsApp initialized');
+  console.log(`📱 WhatsApp number: ${process.env.TWILIO_WHATSAPP_NUMBER}`);
 }
 
-/**
- * Send WhatsApp message
- */
 async function sendWhatsAppMessage(to, message) {
   try {
     if (!twilioClient) {
-      throw new Error('Twilio client not initialized');
+      throw new Error('Twilio not initialized');
     }
 
-    const toNumber = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
-    
     const result = await twilioClient.messages.create({
-      body: message,
-      from: twilioWhatsAppNumber,
-      to: toNumber
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: to,
+      body: message
     });
 
-    console.log(`✅ WhatsApp message sent to ${toNumber}`);
-    
-    return { 
-      success: true, 
-      sid: result.sid,
-      to: toNumber,
-      status: result.status
+    return {
+      success: true,
+      sid: result.sid
     };
 
   } catch (error) {
     console.error('❌ Error sending WhatsApp message:', error.message);
-    
-    if (error.code === 21608) {
-      console.error('   → Recipient has not joined Twilio Sandbox');
-    } else if (error.code === 21211) {
-      console.error('   → Invalid phone number format');
-    }
-    
-    return { 
-      success: false, 
-      error: error.message,
-      code: error.code 
+    return {
+      success: false,
+      error: error.message
     };
   }
 }
 
-/**
- * Parse incoming WhatsApp webhook data
- */
 function parseIncomingMessage(req) {
   try {
-    const message = {
-      from: req.body.From,
-      to: req.body.To,
-      body: req.body.Body || '',
-      messageId: req.body.MessageSid,
-      profileName: req.body.ProfileName || 'Unknown',
-      numMedia: parseInt(req.body.NumMedia) || 0,
-      mediaUrls: []
+    const from = req.body.From;
+    const body = req.body.Body || '';
+    const profileName = req.body.ProfileName || 'User';
+    const numMedia = parseInt(req.body.NumMedia) || 0;
+
+    const phoneNumber = from.replace('whatsapp:', '');
+
+    return {
+      from,
+      phoneNumber,
+      body,
+      profileName,
+      numMedia
     };
-
-    if (message.numMedia > 0) {
-      for (let i = 0; i < message.numMedia; i++) {
-        message.mediaUrls.push({
-          url: req.body[`MediaUrl${i}`],
-          type: req.body[`MediaContentType${i}`]
-        });
-      }
-    }
-
-    message.phoneNumber = message.from.replace('whatsapp:', '');
-
-    return message;
   } catch (error) {
-    console.error('❌ Error parsing incoming message:', error);
+    console.error('Error parsing message:', error);
     return null;
   }
 }
 
-/**
- * Rate limiting
- */
-const messageTimestamps = new Map();
-
-function checkRateLimit(phoneNumber, limit = 50, windowMs = 3600000) {
+function checkRateLimit(phoneNumber, limit = 50) {
   const now = Date.now();
-  const userMessages = messageTimestamps.get(phoneNumber) || [];
-  
-  const recentMessages = userMessages.filter(timestamp => now - timestamp < windowMs);
-  
-  if (recentMessages.length >= limit) {
-    console.warn(`⚠️  Rate limit exceeded for ${phoneNumber}`);
+  const userMessages = messageCount.get(phoneNumber) || { count: 0, resetTime: now + RATE_LIMIT_WINDOW };
+
+  if (now > userMessages.resetTime) {
+    messageCount.set(phoneNumber, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+
+  if (userMessages.count >= limit) {
     return false;
   }
-  
-  recentMessages.push(now);
-  messageTimestamps.set(phoneNumber, recentMessages);
-  
+
+  userMessages.count++;
+  messageCount.set(phoneNumber, userMessages);
   return true;
 }
 
-function getRateLimitStatus(phoneNumber, windowMs = 3600000) {
-  const now = Date.now();
-  const userMessages = messageTimestamps.get(phoneNumber) || [];
-  const recentMessages = userMessages.filter(timestamp => now - timestamp < windowMs);
-  
-  return {
-    count: recentMessages.length,
-    limit: parseInt(process.env.RATE_LIMIT) || 50,
-    remaining: (parseInt(process.env.RATE_LIMIT) || 50) - recentMessages.length
-  };
-}
-
-function cleanupRateLimitData() {
-  const now = Date.now();
-  const windowMs = 3600000;
-  let cleaned = 0;
-  
-  for (const [phoneNumber, timestamps] of messageTimestamps.entries()) {
-    const recentMessages = timestamps.filter(timestamp => now - timestamp < windowMs);
-    
-    if (recentMessages.length === 0) {
-      messageTimestamps.delete(phoneNumber);
-      cleaned++;
-    } else {
-      messageTimestamps.set(phoneNumber, recentMessages);
-    }
+function getRateLimitStatus(phoneNumber) {
+  const userMessages = messageCount.get(phoneNumber);
+  if (!userMessages) {
+    return { count: 0, limit: parseInt(process.env.RATE_LIMIT) || 50 };
   }
-  
-  if (cleaned > 0) {
-    console.log(`🧹 Cleaned up rate limit data for ${cleaned} users`);
-  }
+  return { count: userMessages.count, limit: parseInt(process.env.RATE_LIMIT) || 50 };
 }
-
-setInterval(cleanupRateLimitData, 600000);
 
 module.exports = {
   initTwilio,
