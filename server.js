@@ -1,6 +1,6 @@
 /**
  * WHATSAPP AI CHATBOT SERVER
- * Optimized for Render.com deployment with OpenAI/Claude support
+ * Optimized for Render.com deployment with OpenAI/Claude/Gemini support
  */
 
 require('dotenv').config();
@@ -58,8 +58,9 @@ app.get('/', (req, res) => {
   res.json({
     status: 'running',
     service: 'WhatsApp AI Chatbot',
-    version: '1.0.0',
+    version: '2.0.0',
     platform: 'Render.com',
+    aiProviders: ['OpenAI', 'Claude', 'Google Gemini'],
     timestamp: new Date().toISOString(),
     endpoints: {
       health: '/health',
@@ -74,7 +75,8 @@ app.get('/health', (req, res) => {
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage()
+    memory: process.memoryUsage(),
+    aiProvider: process.env.AI_PROVIDER || 'openai'
   });
 });
 
@@ -137,7 +139,7 @@ app.post('/webhook', async (req, res) => {
     const history = await getConversationHistory(phoneNumber, clientId, 5);
 
     // Generate AI response
-    console.log(`🤖 Generating AI response...`);
+    console.log(`🤖 Generating AI response using ${process.env.AI_PROVIDER || 'OpenAI'}...`);
     const aiResult = await getAIResponse(messageText, history, clientConfig);
 
     const responseText = aiResult.response;
@@ -320,10 +322,47 @@ app.get('/admin/rate-limit/:phoneNumber', (req, res) => {
 });
 
 // ============================================
+// AI PROVIDER SWITCHING ENDPOINT
+// ============================================
+
+app.post('/admin/switch-provider', (req, res) => {
+  try {
+    const { provider } = req.body;
+    
+    const validProviders = ['openai', 'anthropic', 'gemini'];
+    if (!validProviders.includes(provider)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid provider. Must be one of: ${validProviders.join(', ')}`
+      });
+    }
+
+    // Note: This changes it for current session only
+    // For permanent change, update environment variable in Render
+    process.env.AI_PROVIDER = provider;
+
+    res.json({
+      success: true,
+      message: `AI provider switched to ${provider}`,
+      note: 'This change is temporary. Update AI_PROVIDER env variable in Render for permanent change.'
+    });
+
+  } catch (error) {
+    console.error('Error switching provider:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to switch provider'
+    });
+  }
+});
+
+// ============================================
 // ADMIN DASHBOARD (HTML)
 // ============================================
 
 app.get('/admin', (req, res) => {
+  const currentProvider = process.env.AI_PROVIDER || 'openai';
+  
   res.send(`
     <!DOCTYPE html>
     <html lang="en">
@@ -367,6 +406,15 @@ app.get('/admin', (req, res) => {
           border-radius: 20px;
           font-size: 0.8em;
           font-weight: 600;
+        }
+        .provider-badge {
+          background: #4CAF50;
+          color: white;
+          padding: 6px 14px;
+          border-radius: 20px;
+          font-size: 0.85em;
+          font-weight: 600;
+          margin-left: 10px;
         }
         .section { 
           background: #f8f9fa; 
@@ -463,6 +511,29 @@ app.get('/admin', (req, res) => {
           border-top: 2px solid #e0e0e0;
           color: #666;
         }
+        .provider-selector {
+          display: flex;
+          gap: 10px;
+          margin: 15px 0;
+        }
+        .provider-btn {
+          padding: 10px 20px;
+          border: 2px solid #e0e0e0;
+          background: white;
+          cursor: pointer;
+          border-radius: 8px;
+          font-weight: 600;
+          transition: all 0.3s;
+        }
+        .provider-btn:hover {
+          border-color: #25D366;
+          transform: translateY(-2px);
+        }
+        .provider-btn.active {
+          background: #25D366;
+          color: white;
+          border-color: #25D366;
+        }
       </style>
     </head>
     <body>
@@ -470,9 +541,30 @@ app.get('/admin', (req, res) => {
         <h1>
           📱 WhatsApp AI Chatbot Admin
           <span class="badge">Render</span>
+          <span class="provider-badge" id="currentProvider">🤖 ${currentProvider.toUpperCase()}</span>
         </h1>
         <p class="subtitle">Manage your AI-powered WhatsApp business assistant</p>
         
+        <div class="section">
+          <h2>🤖 AI Provider Settings</h2>
+          <p style="margin-bottom: 15px; color: #666;">Current: <strong id="providerDisplay">${currentProvider.toUpperCase()}</strong></p>
+          <div class="provider-selector">
+            <button class="provider-btn ${currentProvider === 'openai' ? 'active' : ''}" onclick="switchProvider('openai')">
+              🔷 OpenAI GPT-3.5
+            </button>
+            <button class="provider-btn ${currentProvider === 'anthropic' ? 'active' : ''}" onclick="switchProvider('anthropic')">
+              🟣 Claude Sonnet
+            </button>
+            <button class="provider-btn ${currentProvider === 'gemini' ? 'active' : ''}" onclick="switchProvider('gemini')">
+              🔶 Google Gemini
+            </button>
+          </div>
+          <div id="providerResult"></div>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #999;">
+            ⚠️ Note: Provider change is temporary. For permanent change, update AI_PROVIDER in Render environment variables.
+          </p>
+        </div>
+
         <div class="section">
           <h2>➕ Add New Client</h2>
           <form id="addClientForm">
@@ -516,13 +608,43 @@ app.get('/admin', (req, res) => {
         </div>
 
         <div class="footer">
-          <p>🚀 Powered by Render.com | 🤖 OpenAI GPT-3.5-Turbo | 📱 Twilio WhatsApp API</p>
+          <p>🚀 Powered by Render.com | 🤖 OpenAI • Claude • Gemini | 📱 Twilio WhatsApp API</p>
           <p style="margin-top: 10px; font-size: 0.9em;">Made with ❤️ for your business success</p>
         </div>
       </div>
 
       <script>
         window.addEventListener('load', loadClients);
+
+        async function switchProvider(provider) {
+          const result = document.getElementById('providerResult');
+          result.innerHTML = '⏳ Switching provider...';
+
+          try {
+            const response = await fetch('/admin/switch-provider', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ provider })
+            });
+            const json = await response.json();
+
+            if (json.success) {
+              result.innerHTML = '<div class="success">✅ ' + json.message + '</div>';
+              document.getElementById('currentProvider').textContent = '🤖 ' + provider.toUpperCase();
+              document.getElementById('providerDisplay').textContent = provider.toUpperCase();
+              
+              // Update button states
+              document.querySelectorAll('.provider-btn').forEach(btn => {
+                btn.classList.remove('active');
+              });
+              event.target.classList.add('active');
+            } else {
+              result.innerHTML = '<div class="error">❌ ' + json.error + '</div>';
+            }
+          } catch (error) {
+            result.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
+          }
+        }
 
         document.getElementById('addClientForm').addEventListener('submit', async (e) => {
           e.preventDefault();
@@ -685,6 +807,7 @@ async function startServer() {
       console.log('\n✅ Server started successfully!\n');
       console.log('═══════════════════════════════════════════');
       console.log(`🌐 Server running on port ${PORT}`);
+      console.log(`🤖 AI Provider: ${process.env.AI_PROVIDER || 'openai'}`);
       console.log(`📱 Webhook: /webhook`);
       console.log(`⚙️  Admin Panel: /admin`);
       console.log('═══════════════════════════════════════════');
