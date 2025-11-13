@@ -1,6 +1,6 @@
 /**
- * WHATSAPP AI CHATBOT SERVER
- * Optimized for Render.com deployment with OpenAI/Claude/Gemini support
+ * WHATSAPP AI CHATBOT SERVER - GEMINI ONLY
+ * Simple, clean, production-ready
  */
 
 require('dotenv').config();
@@ -19,8 +19,7 @@ const {
 
 const { 
   getAIResponse, 
-  detectLanguage, 
-  getWelcomeMessage,
+  detectLanguage,
   validateAPIConfig
 } = require('./ai');
 
@@ -34,7 +33,7 @@ const {
   updateAnalytics 
 } = require('./database');
 
-// Initialize Express app
+// Initialize Express
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -45,28 +44,21 @@ app.use(bodyParser.json());
 
 // Request logging
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
 // ============================================
-// HEALTH & STATUS ENDPOINTS
+// HEALTH CHECK
 // ============================================
 
 app.get('/', (req, res) => {
   res.json({
     status: 'running',
     service: 'WhatsApp AI Chatbot',
-    version: '2.0.0',
-    platform: 'Render.com',
-    aiProviders: ['OpenAI', 'Claude', 'Google Gemini'],
-    timestamp: new Date().toISOString(),
-    endpoints: {
-      health: '/health',
-      webhook: '/webhook',
-      admin: '/admin'
-    }
+    version: '1.0.0',
+    aiProvider: 'Google Gemini',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -74,14 +66,12 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    aiProvider: process.env.AI_PROVIDER || 'openai'
+    uptime: process.uptime()
   });
 });
 
 // ============================================
-// MAIN WEBHOOK ENDPOINT
+// WEBHOOK - MAIN ENDPOINT
 // ============================================
 
 app.post('/webhook', async (req, res) => {
@@ -89,8 +79,7 @@ app.post('/webhook', async (req, res) => {
     const incomingMessage = parseIncomingMessage(req);
     
     if (!incomingMessage) {
-      console.error('Failed to parse incoming message');
-      return res.status(400).send('Invalid message format');
+      return res.status(400).send('Invalid message');
     }
 
     const { phoneNumber, body: messageText, numMedia, profileName } = incomingMessage;
@@ -99,26 +88,26 @@ app.post('/webhook', async (req, res) => {
     console.log(`   From: ${profileName} (${phoneNumber})`);
     console.log(`   Text: "${messageText}"`);
 
-    // Check rate limit
+    // Rate limit check
     const rateLimit = parseInt(process.env.RATE_LIMIT) || 50;
     if (!checkRateLimit(phoneNumber, rateLimit)) {
       const language = detectLanguage(messageText);
-      const limitMessage = language === 'bn'
-        ? '⚠️ দুঃখিত, আপনি অনেকগুলি বার্তা পাঠিয়েছেন। অনুগ্রহ করে ১ ঘন্টা পরে আবার চেষ্টা করুন।'
-        : '⚠️ Sorry, you have exceeded the message limit. Please try again in 1 hour.';
+      const limitMsg = language === 'bn'
+        ? '⚠️ দুঃখিত, আপনি অনেকগুলি বার্তা পাঠিয়েছেন। ১ ঘন্টা পরে চেষ্টা করুন।'
+        : '⚠️ Too many messages. Please try again in 1 hour.';
       
-      await sendWhatsAppMessage(incomingMessage.from, limitMessage);
+      await sendWhatsAppMessage(incomingMessage.from, limitMsg);
       return res.status(429).send('Rate limit exceeded');
     }
 
-    // Handle media messages
+    // Handle media
     if (numMedia > 0) {
       const language = detectLanguage(messageText);
-      const mediaResponse = language === 'bn'
-        ? '🖼️ দুঃখিত, আমি এখনও ছবি বা ভিডিও প্রক্রিয়া করতে পারি না। অনুগ্রহ করে আপনার প্রশ্ন টেক্সটে লিখুন।'
-        : '🖼️ Sorry, I cannot process images or videos yet. Please send your question as text.';
+      const mediaMsg = language === 'bn'
+        ? '🖼️ দুঃখিত, আমি ছবি প্রক্রিয়া করতে পারি না। টেক্সট পাঠান।'
+        : '🖼️ Sorry, I cannot process images. Please send text.';
       
-      await sendWhatsAppMessage(incomingMessage.from, mediaResponse);
+      await sendWhatsAppMessage(incomingMessage.from, mediaMsg);
       return res.status(200).send('OK');
     }
 
@@ -127,19 +116,18 @@ app.post('/webhook', async (req, res) => {
       return res.status(200).send('OK');
     }
 
-    // Get client configuration
+    // Get client config
     const clientId = 'default';
     const clientConfig = await getClient(clientId) || {};
 
     // Save incoming message
     await saveMessage(phoneNumber, messageText, 'user', clientId);
-    await updateAnalytics(clientId, true);
 
     // Get conversation history
     const history = await getConversationHistory(phoneNumber, clientId, 5);
 
     // Generate AI response
-    console.log(`🤖 Generating AI response using ${process.env.AI_PROVIDER || 'OpenAI'}...`);
+    console.log(`🤖 Generating response...`);
     const aiResult = await getAIResponse(messageText, history, clientConfig);
 
     const responseText = aiResult.response;
@@ -147,28 +135,26 @@ app.post('/webhook', async (req, res) => {
 
     // Save AI response
     await saveMessage(phoneNumber, responseText, 'assistant', clientId, aiResult.language);
-    await updateAnalytics(clientId, false);
 
-    // Send response via WhatsApp
+    // Send via WhatsApp
     const sendResult = await sendWhatsAppMessage(incomingMessage.from, responseText);
 
     if (sendResult.success) {
-      console.log(`✅ Message delivered successfully\n`);
+      console.log(`✅ Message delivered\n`);
     } else {
-      console.error(`❌ Failed to deliver message\n`);
+      console.error(`❌ Failed to deliver\n`);
     }
 
-    // Respond to Twilio with 200 OK
     res.status(200).send('OK');
 
   } catch (error) {
-    console.error('❌ Error in webhook:', error);
-    res.status(500).send('Internal server error');
+    console.error('❌ Webhook error:', error);
+    res.status(500).send('Error');
   }
 });
 
 // ============================================
-// ADMIN API ENDPOINTS
+// ADMIN API
 // ============================================
 
 app.post('/admin/add-client', async (req, res) => {
@@ -176,58 +162,27 @@ app.post('/admin/add-client', async (req, res) => {
     const { clientId, businessName, whatsappNumber, aiInstructions, language } = req.body;
 
     if (!clientId || !businessName || !whatsappNumber) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Missing required fields' 
-      });
+      return res.status(400).json({ success: false, error: 'Missing fields' });
     }
 
-    const result = await addClient(
-      clientId, 
-      businessName, 
-      whatsappNumber, 
-      aiInstructions, 
-      language || 'en'
+    const result = await addClient(clientId, businessName, whatsappNumber, aiInstructions, language || 'en');
+
+    res.json(result.success 
+      ? { success: true, message: `Client ${businessName} added` }
+      : { success: false, error: result.error }
     );
 
-    if (result.success) {
-      res.json({ 
-        success: true, 
-        message: `Client ${businessName} added successfully`,
-        clientId: clientId
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: result.error
-      });
-    }
-
   } catch (error) {
-    console.error('Error adding client:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to add client' 
-    });
+    res.status(500).json({ success: false, error: 'Failed to add client' });
   }
 });
 
 app.get('/admin/clients', async (req, res) => {
   try {
     const clients = await getAllClients();
-    
-    res.json({
-      success: true,
-      count: clients.length,
-      clients: clients
-    });
-
+    res.json({ success: true, count: clients.length, clients });
   } catch (error) {
-    console.error('Error fetching clients:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch clients' 
-    });
+    res.status(500).json({ success: false, error: 'Failed to fetch clients' });
   }
 });
 
@@ -242,29 +197,21 @@ app.get('/admin/conversations/:phoneNumber', async (req, res) => {
     res.json({
       success: true,
       phoneNumber,
-      clientId,
       messageCount: history.length,
       messages: history
     });
 
   } catch (error) {
-    console.error('Error fetching conversations:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch conversations' 
-    });
+    res.status(500).json({ success: false, error: 'Failed to fetch conversations' });
   }
 });
 
 app.post('/admin/send-message', async (req, res) => {
   try {
-    const { phoneNumber, message, clientId } = req.body;
+    const { phoneNumber, message } = req.body;
 
     if (!phoneNumber || !message) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Missing phoneNumber or message' 
-      });
+      return res.status(400).json({ success: false, error: 'Missing fields' });
     }
 
     const formattedNumber = phoneNumber.startsWith('whatsapp:') 
@@ -274,85 +221,14 @@ app.post('/admin/send-message', async (req, res) => {
     const result = await sendWhatsAppMessage(formattedNumber, message);
 
     if (result.success) {
-      await saveMessage(
-        phoneNumber.replace('whatsapp:', ''), 
-        message, 
-        'assistant', 
-        clientId || 'default'
-      );
-
-      res.json({ 
-        success: true, 
-        messageSid: result.sid 
-      });
+      await saveMessage(phoneNumber.replace('whatsapp:', ''), message, 'assistant', 'default');
+      res.json({ success: true, messageSid: result.sid });
     } else {
-      res.status(500).json({ 
-        success: false, 
-        error: result.error 
-      });
+      res.status(500).json({ success: false, error: result.error });
     }
 
   } catch (error) {
-    console.error('Error sending message:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to send message' 
-    });
-  }
-});
-
-app.get('/admin/rate-limit/:phoneNumber', (req, res) => {
-  try {
-    const { phoneNumber } = req.params;
-    const status = getRateLimitStatus(phoneNumber);
-    
-    res.json({
-      success: true,
-      phoneNumber,
-      rateLimit: status
-    });
-
-  } catch (error) {
-    console.error('Error getting rate limit status:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to get rate limit status' 
-    });
-  }
-});
-
-// ============================================
-// AI PROVIDER SWITCHING ENDPOINT
-// ============================================
-
-app.post('/admin/switch-provider', (req, res) => {
-  try {
-    const { provider } = req.body;
-    
-    const validProviders = ['openai', 'anthropic', 'gemini'];
-    if (!validProviders.includes(provider)) {
-      return res.status(400).json({
-        success: false,
-        error: `Invalid provider. Must be one of: ${validProviders.join(', ')}`
-      });
-    }
-
-    // Note: This changes it for current session only
-    // For permanent change, update environment variable in Render
-    process.env.AI_PROVIDER = provider;
-
-    res.json({
-      success: true,
-      message: `AI provider switched to ${provider}`,
-      note: 'This change is temporary. Update AI_PROVIDER env variable in Render for permanent change.'
-    });
-
-  } catch (error) {
-    console.error('Error switching provider:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to switch provider'
-    });
+    res.status(500).json({ success: false, error: 'Failed to send message' });
   }
 });
 
@@ -361,15 +237,13 @@ app.post('/admin/switch-provider', (req, res) => {
 // ============================================
 
 app.get('/admin', (req, res) => {
-  const currentProvider = process.env.AI_PROVIDER || 'openai';
-  
   res.send(`
     <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>WhatsApp Chatbot Admin - Render</title>
+      <title>WhatsApp Bot Admin - Gemini</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -389,32 +263,21 @@ app.get('/admin', (req, res) => {
         h1 { 
           color: #25D366; 
           margin-bottom: 10px;
-          display: flex;
-          align-items: center;
-          gap: 10px;
           font-size: 2em;
+        }
+        .badge {
+          background: #4285F4;
+          color: white;
+          padding: 6px 14px;
+          border-radius: 20px;
+          font-size: 0.8em;
+          font-weight: 600;
+          margin-left: 10px;
         }
         .subtitle { 
           color: #666; 
           margin-bottom: 30px;
           font-size: 1.1em;
-        }
-        .badge {
-          background: #667eea;
-          color: white;
-          padding: 4px 12px;
-          border-radius: 20px;
-          font-size: 0.8em;
-          font-weight: 600;
-        }
-        .provider-badge {
-          background: #4CAF50;
-          color: white;
-          padding: 6px 14px;
-          border-radius: 20px;
-          font-size: 0.85em;
-          font-weight: 600;
-          margin-left: 10px;
         }
         .section { 
           background: #f8f9fa; 
@@ -435,11 +298,10 @@ app.get('/admin', (req, res) => {
           border: 2px solid #e0e0e0;
           border-radius: 8px;
           font-size: 14px;
-          transition: border-color 0.3s;
         }
-        input:focus, textarea:focus, select:focus {
-          outline: none;
-          border-color: #25D366;
+        input:focus, textarea:focus { 
+          outline: none; 
+          border-color: #25D366; 
         }
         button { 
           background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
@@ -451,20 +313,17 @@ app.get('/admin', (req, res) => {
           font-size: 14px;
           font-weight: 600;
           margin-top: 10px;
-          transition: transform 0.2s, box-shadow 0.2s;
         }
         button:hover { 
           transform: translateY(-2px);
           box-shadow: 0 4px 12px rgba(37, 211, 102, 0.4);
         }
-        button:active { transform: translateY(0); }
         .success { 
           color: #25D366; 
           padding: 12px;
           background: #e8f5e9;
           border-radius: 8px;
           margin-top: 10px;
-          border-left: 4px solid #25D366;
         }
         .error { 
           color: #d32f2f; 
@@ -472,7 +331,6 @@ app.get('/admin', (req, res) => {
           background: #ffebee;
           border-radius: 8px;
           margin-top: 10px;
-          border-left: 4px solid #d32f2f;
         }
         .client-card {
           background: white;
@@ -480,30 +338,7 @@ app.get('/admin', (req, res) => {
           margin: 15px 0;
           border-radius: 12px;
           border: 2px solid #e0e0e0;
-          transition: transform 0.2s, box-shadow 0.2s;
         }
-        .client-card:hover {
-          transform: translateY(-4px);
-          box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-        }
-        .client-card h3 {
-          color: #333;
-          margin-bottom: 10px;
-        }
-        .client-card p {
-          color: #666;
-          font-size: 14px;
-          margin: 6px 0;
-        }
-        .status-badge {
-          display: inline-block;
-          padding: 4px 12px;
-          border-radius: 12px;
-          font-size: 12px;
-          font-weight: 600;
-          margin-top: 10px;
-        }
-        .status-active { background: #e8f5e9; color: #2e7d32; }
         .footer {
           text-align: center;
           margin-top: 40px;
@@ -511,159 +346,79 @@ app.get('/admin', (req, res) => {
           border-top: 2px solid #e0e0e0;
           color: #666;
         }
-        .provider-selector {
-          display: flex;
-          gap: 10px;
-          margin: 15px 0;
-        }
-        .provider-btn {
-          padding: 10px 20px;
-          border: 2px solid #e0e0e0;
-          background: white;
-          cursor: pointer;
-          border-radius: 8px;
-          font-weight: 600;
-          transition: all 0.3s;
-        }
-        .provider-btn:hover {
-          border-color: #25D366;
-          transform: translateY(-2px);
-        }
-        .provider-btn.active {
-          background: #25D366;
-          color: white;
-          border-color: #25D366;
-        }
       </style>
     </head>
     <body>
       <div class="container">
-        <h1>
-          📱 WhatsApp AI Chatbot Admin
-          <span class="badge">Render</span>
-          <span class="provider-badge" id="currentProvider">🤖 ${currentProvider.toUpperCase()}</span>
-        </h1>
-        <p class="subtitle">Manage your AI-powered WhatsApp business assistant</p>
+        <h1>📱 WhatsApp AI Admin<span class="badge">🔶 Google Gemini</span></h1>
+        <p class="subtitle">Simple, Fast, Free AI-powered WhatsApp assistant</p>
         
-        <div class="section">
-          <h2>🤖 AI Provider Settings</h2>
-          <p style="margin-bottom: 15px; color: #666;">Current: <strong id="providerDisplay">${currentProvider.toUpperCase()}</strong></p>
-          <div class="provider-selector">
-            <button class="provider-btn ${currentProvider === 'openai' ? 'active' : ''}" onclick="switchProvider('openai')">
-              🔷 OpenAI GPT-3.5
-            </button>
-            <button class="provider-btn ${currentProvider === 'anthropic' ? 'active' : ''}" onclick="switchProvider('anthropic')">
-              🟣 Claude Sonnet
-            </button>
-            <button class="provider-btn ${currentProvider === 'gemini' ? 'active' : ''}" onclick="switchProvider('gemini')">
-              🔶 Google Gemini
-            </button>
-          </div>
-          <div id="providerResult"></div>
-          <p style="margin-top: 10px; font-size: 0.9em; color: #999;">
-            ⚠️ Note: Provider change is temporary. For permanent change, update AI_PROVIDER in Render environment variables.
-          </p>
-        </div>
-
         <div class="section">
           <h2>➕ Add New Client</h2>
           <form id="addClientForm">
-            <input type="text" id="clientId" placeholder="Client ID (e.g., cafe-abc)" required>
+            <input type="text" id="clientId" placeholder="Client ID (e.g., cafe-123)" required>
             <input type="text" id="businessName" placeholder="Business Name" required>
-            <input type="text" id="whatsappNumber" placeholder="WhatsApp Number (+919876543210)" required>
-            <textarea id="aiInstructions" placeholder="AI Instructions (optional)" rows="4"></textarea>
+            <input type="text" id="whatsappNumber" placeholder="WhatsApp (+919876543210)" required>
+            <textarea id="aiInstructions" placeholder="AI Instructions (optional)" rows="3"></textarea>
             <select id="language">
               <option value="en">English</option>
               <option value="bn">Bengali (বাংলা)</option>
             </select>
             <button type="submit">Add Client</button>
           </form>
-          <div id="addClientResult"></div>
+          <div id="addResult"></div>
         </div>
 
         <div class="section">
           <h2>👥 All Clients</h2>
-          <button onclick="loadClients()">🔄 Refresh Client List</button>
+          <button onclick="loadClients()">🔄 Refresh</button>
           <div id="clientsList"></div>
         </div>
 
         <div class="section">
-          <h2>📤 Send Message</h2>
-          <form id="sendMessageForm">
-            <input type="text" id="phoneNumber" placeholder="Phone Number (+919876543210)" required>
-            <textarea id="message" placeholder="Message to send" rows="3" required></textarea>
-            <button type="submit">Send Message</button>
+          <h2>📤 Send Test Message</h2>
+          <form id="sendForm">
+            <input type="text" id="phone" placeholder="Phone (+919876543210)" required>
+            <textarea id="msg" placeholder="Message" rows="3" required></textarea>
+            <button type="submit">Send</button>
           </form>
-          <div id="sendMessageResult"></div>
+          <div id="sendResult"></div>
         </div>
 
         <div class="section">
           <h2>💬 View Conversations</h2>
-          <form id="viewConversationsForm">
-            <input type="text" id="conversationPhone" placeholder="Phone Number (+919876543210)" required>
-            <input type="number" id="conversationLimit" placeholder="Number of messages" value="50">
-            <button type="submit">Load Conversations</button>
+          <form id="convForm">
+            <input type="text" id="convPhone" placeholder="Phone (+919876543210)" required>
+            <button type="submit">Load</button>
           </form>
-          <div id="conversationsResult"></div>
+          <div id="convResult"></div>
         </div>
 
         <div class="footer">
-          <p>🚀 Powered by Render.com | 🤖 OpenAI • Claude • Gemini | 📱 Twilio WhatsApp API</p>
-          <p style="margin-top: 10px; font-size: 0.9em;">Made with ❤️ for your business success</p>
+          <p>🚀 Powered by Render | 🔶 Google Gemini (FREE) | 📱 Twilio WhatsApp</p>
+          <p style="margin-top: 10px;">Made for your business success 💚</p>
         </div>
       </div>
 
       <script>
         window.addEventListener('load', loadClients);
 
-        async function switchProvider(provider) {
-          const result = document.getElementById('providerResult');
-          result.innerHTML = '⏳ Switching provider...';
-
-          try {
-            const response = await fetch('/admin/switch-provider', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ provider })
-            });
-            const json = await response.json();
-
-            if (json.success) {
-              result.innerHTML = '<div class="success">✅ ' + json.message + '</div>';
-              document.getElementById('currentProvider').textContent = '🤖 ' + provider.toUpperCase();
-              document.getElementById('providerDisplay').textContent = provider.toUpperCase();
-              
-              // Update button states
-              document.querySelectorAll('.provider-btn').forEach(btn => {
-                btn.classList.remove('active');
-              });
-              event.target.classList.add('active');
-            } else {
-              result.innerHTML = '<div class="error">❌ ' + json.error + '</div>';
-            }
-          } catch (error) {
-            result.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
-          }
-        }
-
         document.getElementById('addClientForm').addEventListener('submit', async (e) => {
           e.preventDefault();
-          const result = document.getElementById('addClientResult');
-          result.innerHTML = '⏳ Adding client...';
+          const result = document.getElementById('addResult');
+          result.innerHTML = '⏳ Adding...';
           
-          const data = {
-            clientId: document.getElementById('clientId').value,
-            businessName: document.getElementById('businessName').value,
-            whatsappNumber: document.getElementById('whatsappNumber').value,
-            aiInstructions: document.getElementById('aiInstructions').value,
-            language: document.getElementById('language').value
-          };
-
           try {
             const response = await fetch('/admin/add-client', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data)
+              body: JSON.stringify({
+                clientId: document.getElementById('clientId').value,
+                businessName: document.getElementById('businessName').value,
+                whatsappNumber: document.getElementById('whatsappNumber').value,
+                aiInstructions: document.getElementById('aiInstructions').value,
+                language: document.getElementById('language').value
+              })
             });
             const json = await response.json();
             
@@ -681,51 +436,47 @@ app.get('/admin', (req, res) => {
 
         async function loadClients() {
           const container = document.getElementById('clientsList');
-          container.innerHTML = '⏳ Loading clients...';
+          container.innerHTML = '⏳ Loading...';
 
           try {
             const response = await fetch('/admin/clients');
             const json = await response.json();
             
             if (json.success && json.clients.length > 0) {
-              container.innerHTML = json.clients.map(client => \`
+              container.innerHTML = json.clients.map(c => \`
                 <div class="client-card">
-                  <h3>\${client.business_name}</h3>
-                  <p><strong>Client ID:</strong> \${client.client_id}</p>
-                  <p><strong>WhatsApp:</strong> \${client.whatsapp_number}</p>
-                  <p><strong>Language:</strong> \${client.language === 'bn' ? 'Bengali (বাংলা)' : 'English'}</p>
-                  <p><strong>Created:</strong> \${new Date(client.created_at).toLocaleDateString()}</p>
-                  <span class="status-badge status-active">✅ Active</span>
+                  <h3>\${c.business_name}</h3>
+                  <p><strong>ID:</strong> \${c.client_id}</p>
+                  <p><strong>WhatsApp:</strong> \${c.whatsapp_number}</p>
+                  <p><strong>Language:</strong> \${c.language === 'bn' ? 'Bengali' : 'English'}</p>
                 </div>
               \`).join('');
             } else {
-              container.innerHTML = '<p style="padding: 20px; text-align: center; color: #666;">No clients found. Add your first client above!</p>';
+              container.innerHTML = '<p>No clients yet</p>';
             }
           } catch (error) {
-            container.innerHTML = '<div class="error">❌ Error loading clients</div>';
+            container.innerHTML = '<div class="error">❌ Error loading</div>';
           }
         }
 
-        document.getElementById('sendMessageForm').addEventListener('submit', async (e) => {
+        document.getElementById('sendForm').addEventListener('submit', async (e) => {
           e.preventDefault();
-          const result = document.getElementById('sendMessageResult');
-          result.innerHTML = '⏳ Sending message...';
+          const result = document.getElementById('sendResult');
+          result.innerHTML = '⏳ Sending...';
           
-          const data = {
-            phoneNumber: document.getElementById('phoneNumber').value,
-            message: document.getElementById('message').value
-          };
-
           try {
             const response = await fetch('/admin/send-message', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data)
+              body: JSON.stringify({
+                phoneNumber: document.getElementById('phone').value,
+                message: document.getElementById('msg').value
+              })
             });
             const json = await response.json();
             
             if (json.success) {
-              result.innerHTML = '<div class="success">✅ Message sent successfully!</div>';
+              result.innerHTML = '<div class="success">✅ Sent!</div>';
               e.target.reset();
             } else {
               result.innerHTML = '<div class="error">❌ ' + json.error + '</div>';
@@ -735,36 +486,35 @@ app.get('/admin', (req, res) => {
           }
         });
 
-        document.getElementById('viewConversationsForm').addEventListener('submit', async (e) => {
+        document.getElementById('convForm').addEventListener('submit', async (e) => {
           e.preventDefault();
-          const result = document.getElementById('conversationsResult');
-          result.innerHTML = '⏳ Loading conversations...';
+          const result = document.getElementById('convResult');
+          result.innerHTML = '⏳ Loading...';
           
-          const phone = document.getElementById('conversationPhone').value;
-          const limit = document.getElementById('conversationLimit').value;
+          const phone = document.getElementById('convPhone').value;
 
           try {
-            const response = await fetch(\`/admin/conversations/\${phone.replace('+', '')}?limit=\${limit}\`);
+            const response = await fetch(\`/admin/conversations/\${phone.replace('+', '')}\`);
             const json = await response.json();
             
             if (json.success && json.messages.length > 0) {
               result.innerHTML = \`
-                <h3 style="margin-top: 20px;">Conversation with \${json.phoneNumber} (\${json.messageCount} messages)</h3>
-                <div style="max-height: 400px; overflow-y: auto; margin-top: 15px; background: white; padding: 15px; border-radius: 8px;">
-                  \${json.messages.map(msg => \`
-                    <div style="margin: 12px 0; padding: 12px; background: \${msg.sender === 'user' ? '#e3f2fd' : '#f1f8e9'}; border-radius: 8px; border-left: 4px solid \${msg.sender === 'user' ? '#2196F3' : '#8BC34A'};">
-                      <strong style="color: #333;">\${msg.sender === 'user' ? '👤 User' : '🤖 Bot'}:</strong>
-                      <p style="margin: 8px 0; color: #333;">\${msg.message}</p>
-                      <small style="color: #666;">\${new Date(msg.timestamp).toLocaleString()}</small>
+                <h3>Messages: \${json.messageCount}</h3>
+                <div style="max-height: 400px; overflow-y: auto; margin-top: 15px;">
+                  \${json.messages.map(m => \`
+                    <div style="margin: 10px 0; padding: 10px; background: \${m.sender === 'user' ? '#e3f2fd' : '#f1f8e9'}; border-radius: 8px;">
+                      <strong>\${m.sender === 'user' ? '👤 User' : '🤖 Bot'}:</strong>
+                      <p>\${m.message}</p>
+                      <small>\${new Date(m.timestamp).toLocaleString()}</small>
                     </div>
                   \`).join('')}
                 </div>
               \`;
             } else {
-              result.innerHTML = '<p style="padding: 20px; text-align: center; color: #666;">No conversations found for this number.</p>';
+              result.innerHTML = '<p>No messages found</p>';
             }
           } catch (error) {
-            result.innerHTML = '<div class="error">❌ Error loading conversations</div>';
+            result.innerHTML = '<div class="error">❌ Error loading</div>';
           }
         });
       </script>
@@ -774,22 +524,24 @@ app.get('/admin', (req, res) => {
 });
 
 // ============================================
-// SERVER INITIALIZATION
+// START SERVER
 // ============================================
 
 async function startServer() {
   try {
-    console.log('\n🚀 Starting WhatsApp AI Chatbot on Render.com...\n');
+    console.log('\n🚀 Starting WhatsApp AI Chatbot...\n');
     
-    // Validate AI configuration
-    validateAPIConfig();
+    // Validate config
+    if (!validateAPIConfig()) {
+      throw new Error('Gemini API key not configured');
+    }
     
     // Initialize Twilio
-    console.log('📱 Initializing Twilio WhatsApp API...');
+    console.log('📱 Initializing Twilio...');
     initTwilio();
     
     // Initialize Database
-    console.log('🗄️  Initializing PostgreSQL database...');
+    console.log('🗄️  Initializing Database...');
     await initDatabase();
     
     // Add default client
@@ -802,35 +554,29 @@ async function startServer() {
       'en'
     );
 
-    // Start Express server
+    // Start server
     app.listen(PORT, '0.0.0.0', () => {
-      console.log('\n✅ Server started successfully!\n');
-      console.log('═══════════════════════════════════════════');
-      console.log(`🌐 Server running on port ${PORT}`);
-      console.log(`🤖 AI Provider: ${process.env.AI_PROVIDER || 'openai'}`);
+      console.log('\n✅ Server started!\n');
+      console.log('═══════════════════════════════════════');
+      console.log(`🌐 Port: ${PORT}`);
+      console.log(`🤖 AI: Google Gemini (FREE!)`);
       console.log(`📱 Webhook: /webhook`);
-      console.log(`⚙️  Admin Panel: /admin`);
-      console.log('═══════════════════════════════════════════');
-      console.log('\n💚 Ready to receive WhatsApp messages!\n');
-      console.log('🚀 Deployed on Render.com\n');
+      console.log(`⚙️  Admin: /admin`);
+      console.log('═══════════════════════════════════════');
+      console.log('\n💚 Ready for WhatsApp messages!\n');
     });
 
   } catch (error) {
-    console.error('\n❌ Failed to start server:', error);
+    console.error('\n❌ Failed to start:', error);
     process.exit(1);
   }
 }
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n👋 Shutting down gracefully...');
-  process.exit(0);
-});
-
 process.on('SIGTERM', () => {
-  console.log('\n👋 Shutting down gracefully...');
+  console.log('👋 Shutting down...');
   process.exit(0);
 });
 
-// Start the server
+// Start
 startServer();
