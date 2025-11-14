@@ -1,22 +1,41 @@
 /**
  * AI MODULE - Google Gemini (v1 API + gemini-2.0-flash-lite)
+ * Enhanced with strong WhatsApp-friendly prompts
  */
 
 const axios = require("axios");
 
-const GEMINI_MODEL = "gemini-2.0-flash-lite";   // FINAL WORKING MODEL
+// FINAL WORKING MODEL for your key
+const GEMINI_MODEL = "gemini-2.0-flash-lite";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
 
-// Detect language automatically
+// Detect English vs Bengali
 function detectLanguage(message) {
   const bengaliRegex = /[\u0980-\u09FF]/;
   return bengaliRegex.test(message) ? "bn" : "en";
 }
 
-// System prompts
+// STRONGER BUSINESS-GRADE PROMPTS
 const SYSTEM_PROMPTS = {
-  en: `You are a helpful WhatsApp assistant for {BUSINESS_NAME}. Keep answers short (2–3 sentences). Be friendly and accurate.`,
-  bn: `আপনি {BUSINESS_NAME} এর WhatsApp সহায়ক। উত্তর সংক্ষিপ্ত (২–৩ বাক্য) রাখুন। বন্ধুত্বপূর্ণ ও পরিষ্কার হোন।`
+  en: `
+You are a friendly, helpful WhatsApp AI assistant for {BUSINESS_NAME}.  
+Your job:
+- Always give a meaningful, polite response even if the user sends random text, numbers, emojis, or unclear messages.
+- If the message is unclear, ask a simple clarification question.
+- Keep all replies short: **1–2 sentences only**.
+- Maintain a professional but warm tone.
+- Never say "I cannot process this". Instead, guide the user or ask what they need.
+`,
+
+  bn: `
+আপনি {BUSINESS_NAME} এর একজন বন্ধুসুলভ WhatsApp সহায়ক।  
+আপনার কাজ:
+- ব্যবহারকারী অস্পষ্ট, এলোমেলো লেখা, সংখ্যা, বা ইমোজি পাঠালেও সর্বদা ভদ্র ও অর্থবহ উত্তর দিন।
+- বার্তাটি অস্পষ্ট হলে সহজভাবে জানতে চান তারা ঠিক কী জানতে চান।
+- উত্তর **১–২ বাক্যের মধ্যে সংক্ষিপ্ত** রাখুন।
+- ভদ্র, বন্ধুসুলভ ও পেশাদার ভঙ্গি বজায় রাখুন।
+- কখনো "আমি এটি প্রসেস করতে পারছি না" বলবেন না। বরং সাহায্য করার চেষ্টা করুন।
+`
 };
 
 /**
@@ -25,37 +44,28 @@ const SYSTEM_PROMPTS = {
 async function getAIResponse(userMessage, conversationHistory = [], clientConfig = {}) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
-    
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY not configured");
     }
 
     const language = detectLanguage(userMessage);
-    const businessName =
-      clientConfig.business_name ||
-      process.env.BUSINESS_NAME ||
-      "our business";
+    const businessName = clientConfig.business_name || process.env.BUSINESS_NAME || "our business";
 
-    let systemPrompt =
-      clientConfig.ai_instructions ||
-      SYSTEM_PROMPTS[language] ||
-      SYSTEM_PROMPTS.en;
-
+    // Build final instruction
+    let systemPrompt = clientConfig.ai_instructions || SYSTEM_PROMPTS[language] || SYSTEM_PROMPTS.en;
     systemPrompt = systemPrompt.replace("{BUSINESS_NAME}", businessName);
 
     console.log("🤖 Calling Google Gemini API...");
 
-    // Build message payload for Gemini (v1 API format)
+    // Build request contents
     const contents = [
       {
         role: "user",
-        parts: [
-          { text: `${systemPrompt}\n\nUser message: ${userMessage}` }
-        ]
+        parts: [{ text: `${systemPrompt}\n\nUser message: ${userMessage}` }]
       }
     ];
 
-    // Add conversation history
+    // Add past conversation
     conversationHistory.forEach(msg => {
       contents.push({
         role: msg.sender === "user" ? "user" : "model",
@@ -63,13 +73,13 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       });
     });
 
-    // Add latest user message
+    // Add current user message again (improves clarity)
     contents.push({
       role: "user",
       parts: [{ text: userMessage }]
     });
 
-    // Gemini API call
+    // API call
     const response = await axios.post(
       `${GEMINI_ENDPOINT}?key=${apiKey}`,
       {
@@ -96,14 +106,14 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
 
     const aiResponse =
       response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-      "I'm sorry, I couldn't generate a response.";
+      "I'm here to help—could you clarify your question a bit?";
 
     console.log(`✅ Gemini reply: "${aiResponse.substring(0, 60)}..."`);
 
     return {
       success: true,
       response: aiResponse,
-      language: language,
+      language,
       provider: "gemini"
     };
 
@@ -114,13 +124,13 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
 
     const fallbackMessage =
       language === "bn"
-        ? "দুঃখিত, আমি এখন আপনার বার্তা প্রক্রিয়া করতে পারছি না। কিছুক্ষণ পরে আবার চেষ্টা করুন।"
-        : "Sorry, I'm having trouble right now. Please try again in a moment.";
+        ? "দুঃখিত, একটু সমস্যা হচ্ছে। দয়া করে আবার লিখে জানান কী সাহায্য লাগবে।"
+        : "Sorry, something went wrong. Could you please type your message again?";
 
     return {
       success: false,
       response: fallbackMessage,
-      language: language,
+      language,
       error: error.message
     };
   }
@@ -131,9 +141,11 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
  */
 function validateAPIConfig() {
   const configured = !!process.env.GEMINI_API_KEY;
+
   console.log("🔧 AI Configuration:");
   console.log(`   Provider: GEMINI`);
- console.log(`   Key: ${configured ? "✅ Configured" : "❌ Missing"}`);
+  console.log(`   Key: ${configured ? "✅ Configured" : "❌ Missing"}`);
+
   return configured;
 }
 
