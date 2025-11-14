@@ -1,13 +1,13 @@
 /**
- * DATABASE MODULE - PostgreSQL (CLEANED FOR YOUR SCHEMA)
+ * DATABASE MODULE - PostgreSQL (FINAL CLEAN VERSION)
  */
 
 const { Pool } = require('pg');
 
-// Use your Render Postgres URL
+// Render Postgres URL
 const connectionString =
-  process.env.DATABASE_URL || // Render standard
-  process.env.DB_POSTGRESDB_URL; // your fallback
+  process.env.DATABASE_URL ||
+  process.env.DB_POSTGRESDB_URL;
 
 const pool = new Pool({
   connectionString,
@@ -15,10 +15,7 @@ const pool = new Pool({
 });
 
 /**
- * Initialize database tables if they don't exist.
- * We DO NOT re-create the clients table because it already exists
- * and has your custom schema (client_id, whatsapp_number, etc.).
- * We only ensure the messages table exists.
+ * Initialize messages table (clients already exists)
  */
 async function initDatabase() {
   await pool.query(`
@@ -26,20 +23,20 @@ async function initDatabase() {
       id SERIAL PRIMARY KEY,
       client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
       from_number VARCHAR(30),
-      direction VARCHAR(10),         -- 'inbound' or 'outbound'
+      direction VARCHAR(10),
       body TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 
-  console.log('🗄️  Database initialized (messages table ready)');
+  console.log("🗄️  Database initialized (messages table ready)");
 }
 
 /**
- * Get all clients (restaurants)
+ * Get all clients
  */
 async function getClients() {
-  const { rows } = await pool.query('SELECT * FROM clients ORDER BY id');
+  const { rows } = await pool.query("SELECT * FROM clients ORDER BY id");
   return rows;
 }
 
@@ -47,33 +44,36 @@ async function getClients() {
  * Get one client by id
  */
 async function getClientById(id) {
-  const { rows } = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+  const { rows } = await pool.query(
+    "SELECT * FROM clients WHERE id = $1",
+    [id]
+  );
   return rows[0] || null;
 }
 
 /**
- * Get default client (first row)
+ * Default client (first row)
  */
 async function getDefaultClient() {
-  const { rows } = await pool.query('SELECT * FROM clients ORDER BY id LIMIT 1');
+  const { rows } = await pool.query(
+    "SELECT * FROM clients ORDER BY id LIMIT 1"
+  );
   return rows[0] || null;
 }
 
 /**
- * Map Twilio "to" number to a client.
- * In your schema the column is `whatsapp_number`, NOT `phone`.
+ * Map Twilio → client by whatsapp_number
  */
 async function getClientByTwilioNumber(twilioNumber) {
   const { rows } = await pool.query(
-    'SELECT * FROM clients WHERE whatsapp_number = $1 LIMIT 1',
+    "SELECT * FROM clients WHERE whatsapp_number = $1 LIMIT 1",
     [twilioNumber]
   );
   return rows[0] || null;
 }
 
 /**
- * Update scheduling fields for a client
- * (open_hour, close_hour, daily_summary_time, timezone, broadcast_message, broadcast_time)
+ * Update schedule fields for client
  */
 async function updateClientSchedule(id, schedule) {
   const {
@@ -102,7 +102,7 @@ async function updateClientSchedule(id, schedule) {
 }
 
 /**
- * Log every WhatsApp message for analytics
+ * Log WhatsApp message
  */
 async function logMessage({ client_id, from_number, direction, body }) {
   await pool.query(
@@ -113,7 +113,7 @@ async function logMessage({ client_id, from_number, direction, body }) {
 }
 
 /**
- * Simple daily summary (for today)
+ * Summary for today
  */
 async function getTodaySummary(client_id) {
   const { rows } = await pool.query(
@@ -130,8 +130,7 @@ async function getTodaySummary(client_id) {
 }
 
 /**
- * Leads = unique inbound numbers last 30 days
- * Used for promos/broadcasts.
+ * Leads for broadcast
  */
 async function getLeads(client_id) {
   const { rows } = await pool.query(
