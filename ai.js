@@ -1,10 +1,10 @@
 /**
- * AI MODULE - Google Gemini (v1 API + gemini-1.5-flash-latest)
+ * AI MODULE - Google Gemini (v1 API + gemini-2.0-flash-lite)
  */
 
 const axios = require("axios");
 
-const GEMINI_MODEL = "gemini-1.5-flash-latest";   // FIXED model name for legacy keys
+const GEMINI_MODEL = "gemini-2.0-flash-lite";   // FINAL WORKING MODEL
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
 
 // Detect language automatically
@@ -15,8 +15,8 @@ function detectLanguage(message) {
 
 // System prompts
 const SYSTEM_PROMPTS = {
-  en: `You are a helpful WhatsApp assistant for {BUSINESS_NAME}. Answer questions about products and services. Keep responses short (2–3 sentences) since this is WhatsApp. Be friendly and professional.`,
-  bn: `আপনি {BUSINESS_NAME} এর WhatsApp সহায়ক। পণ্য বা সেবা সম্পর্কে সংক্ষিপ্ত (২–৩ বাক্য) উত্তর দিন। বন্ধুত্বপূর্ণ এবং পেশাদার হোন।`
+  en: `You are a helpful WhatsApp assistant for {BUSINESS_NAME}. Keep answers short (2–3 sentences). Be friendly and accurate.`,
+  bn: `আপনি {BUSINESS_NAME} এর WhatsApp সহায়ক। উত্তর সংক্ষিপ্ত (২–৩ বাক্য) রাখুন। বন্ধুত্বপূর্ণ ও পরিষ্কার হোন।`
 };
 
 /**
@@ -50,7 +50,7 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       {
         role: "user",
         parts: [
-          { text: `${systemPrompt}\n\nNow respond to this message: ${userMessage}` }
+          { text: `${systemPrompt}\n\nUser message: ${userMessage}` }
         ]
       }
     ];
@@ -69,7 +69,7 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       parts: [{ text: userMessage }]
     });
 
-    // Gemini API request — final corrected version
+    // Gemini API call
     const response = await axios.post(
       `${GEMINI_ENDPOINT}?key=${apiKey}`,
       {
@@ -133,12 +133,7 @@ function validateAPIConfig() {
   const configured = !!process.env.GEMINI_API_KEY;
   console.log("🔧 AI Configuration:");
   console.log(`   Provider: GEMINI`);
-  console.log(`   Gemini Key: ${configured ? "✅ Configured" : "❌ Missing"}`);
-
-  if (!configured) {
-    console.error("❌ GEMINI_API_KEY not found in environment variables!");
-  }
-
+ console.log(`   Key: ${configured ? "✅ Configured" : "❌ Missing"}`);
   return configured;
 }
 
