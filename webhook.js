@@ -1,90 +1,88 @@
 // webhook.js
 
-const db = require('./database');
-const { getAIResponse } = require('./ai');
-const { sendWhatsAppMessage, parseIncoming } = require('./whatsapp');
+const db = require("./database");
+const { getAIResponse } = require("./ai");
+const { sendWhatsAppMessage, parseIncoming } = require("./whatsapp");
 
-/**
- * Handle Twilio WhatsApp webhook
- */
 async function handleWhatsAppWebhook(req, res) {
   try {
     const incoming = parseIncoming(req.body);
-    const from = incoming.from; // user
-    const to   = incoming.to;   // your Twilio number
+    const from = incoming.from;
+    const to = incoming.to;
     const text = incoming.body;
 
-    console.log('📩 NEW MESSAGE');
+    console.log("📩 NEW MESSAGE");
     console.log(`   From: ${from}`);
+    console.log(`   To:   ${to}`);
     console.log(`   Text: "${text}"`);
 
-    // 1) find client
+    // 1) Get client by WhatsApp number
     let client = await db.getClientByTwilioNumber(to);
+
     if (!client) {
       client = await db.getDefaultClient();
     }
 
     if (!client) {
-      console.error('❌ No client configured in database');
+      console.error("❌ No client found in DB");
       return res.status(500).end();
     }
 
-    // 2) log inbound message
+    // 2) Log inbound message
     await db.logMessage({
       client_id: client.id,
       from_number: from,
-      direction: 'inbound',
+      direction: "inbound",
       body: text
     });
 
-    // 3) check business hours
+    // 3) Check business hours
     const now = new Date();
-    const hourStr = now.toLocaleString('en-GB', {
+    const hourStr = now.toLocaleString("en-GB", {
       hour12: false,
-      hour: '2-digit',
-      timeZone: client.timezone || 'Asia/Kolkata'
+      hour: "2-digit",
+      timeZone: client.timezone || "Asia/Kolkata"
     });
+
     const hour = Number(hourStr);
 
     if (hour < client.open_hour || hour >= client.close_hour) {
-      const closedMsg =
-        `We are currently closed. Our hours are ` +
-        `${client.open_hour}:00–${client.close_hour}:00. ` +
-        `Please leave a message and we will reply after we open.`;
-
-      await sendWhatsAppMessage(from, closedMsg);
+      const msg = `We are currently closed.\nHours: ${client.open_hour}:00–${client.close_hour}:00`;
+      await sendWhatsAppMessage(from, msg);
 
       await db.logMessage({
         client_id: client.id,
         from_number: from,
-        direction: 'outbound',
-        body: closedMsg
+        direction: "outbound",
+        body: msg
       });
 
       return res.status(200).end();
     }
 
-    // 4) normal AI reply
-    console.log('🤖 Generating response...');
-    const aiResult = await getAIResponse(text, [], {
+    // 4) AI
+    console.log("🤖 Generating AI reply...");
+    const ai = await getAIResponse(text, [], {
       business_name: client.business_name,
       ai_instructions: client.ai_instructions
     });
 
-    await sendWhatsAppMessage(from, aiResult.response);
+    const reply = ai.response || "Sorry, please try again.";
+
+    await sendWhatsAppMessage(from, reply);
 
     await db.logMessage({
       client_id: client.id,
       from_number: from,
-      direction: 'outbound',
-      body: aiResult.response
+      direction: "outbound",
+      body: reply
     });
 
-    return res.status(200).end();
+    res.status(200).end();
 
   } catch (err) {
-    console.error('❌ Webhook error:', err);
-    return res.status(500).end();
+    console.error("❌ Webhook error:", err);
+    res.status(500).end();
   }
 }
 
