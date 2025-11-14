@@ -2,148 +2,175 @@
  * DATABASE MODULE - PostgreSQL (FIXED)
  */
 
+// database.js
+
 const { Pool } = require('pg');
 
-let pool = null;
+// Use your Render Postgres URL
+const connectionString =
+  process.env.DATABASE_URL || // if using DATABASE_URL
+  process.env.DB_POSTGRESDB_URL; // fallback to existing var
 
+const pool = new Pool({
+  connectionString,
+  ssl: { rejectUnauthorized: false }
+});
+
+/**
+ * Initialize database tables if they don't exist
+ * Call this ONCE on server startup.
+ */
 async function initDatabase() {
-  const databaseUrl = process.env.DATABASE_URL;
-
-  if (!databaseUrl) {
-    console.error('❌ DATABASE_URL not configured!');
-    throw new Error('DATABASE_URL required');
-  }
-
-  pool = new Pool({
-    connectionString: databaseUrl,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-  });
-
-  // Test connection
-  try {
-    const client = await pool.connect();
-    console.log('✅ Database connection established');
-    client.release();
-  } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    throw error;
-  }
-
-  // Create tables
-  await createTables();
-}
-
-async function createTables() {
-  const createClientsTable = `
+  // CLIENTS TABLE: one row = one restaurant
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS clients (
-      client_id VARCHAR(100) PRIMARY KEY,
-      business_name VARCHAR(255) NOT NULL,
-      whatsapp_number VARCHAR(50) NOT NULL,
+      id SERIAL PRIMARY KEY,
+      business_name VARCHAR(100) NOT NULL,
+      phone VARCHAR(30),  -- owner's WhatsApp or Twilio "to" number mapping
       ai_instructions TEXT,
-      language VARCHAR(10) DEFAULT 'en',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      open_hour INTEGER DEFAULT 12,       -- 12 = 12:00
+      close_hour INTEGER DEFAULT 22,      -- 22 = 22:00
+      daily_summary_time VARCHAR(5) DEFAULT '22:30', -- "HH:MM" 24h
+      timezone VARCHAR(50) DEFAULT 'Asia/Kolkata',
+      broadcast_message TEXT,
+      broadcast_time VARCHAR(5)           -- "HH:MM" 24h
     );
-  `;
+  `);
 
-  const createMessagesTable = `
+  // MESSAGES TABLE: all WhatsApp in/out for analytics
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
       id SERIAL PRIMARY KEY,
-      phone_number VARCHAR(50) NOT NULL,
-      message TEXT NOT NULL,
-      sender VARCHAR(20) NOT NULL,
-      client_id VARCHAR(100) DEFAULT 'default',
-      language VARCHAR(10) DEFAULT 'en',
-      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+      from_number VARCHAR(30),
+      direction VARCHAR(10),         -- 'inbound' or 'outbound'
+      body TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
     );
-  `;
+  `);
 
-  const createIndexes = `
-    CREATE INDEX IF NOT EXISTS idx_phone_client ON messages(phone_number, client_id);
-    CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
-  `;
-
-  try {
-    await pool.query(createClientsTable);
-    await pool.query(createMessagesTable);
-    await pool.query(createIndexes);
-    console.log('✅ Database tables ready');
-  } catch (error) {
-    console.error('❌ Error creating tables:', error.message);
-    // Continue even if tables already exist
-  }
+  console.log('🗄️  Database initialized');
 }
 
-async function saveMessage(phoneNumber, message, sender, clientId = 'default', language = 'en') {
-  try {
-    await pool.query(
-      'INSERT INTO messages (phone_number, message, sender, client_id, language) VALUES ($1, $2, $3, $4, $5)',
-      [phoneNumber, message, sender, clientId, language]
-    );
-  } catch (error) {
-    console.error('Error saving message:', error.message);
-  }
+/**
+ * Get all clients (restaurants)
+ */
+async function getClients() {
+  const { rows } = await pool.query('SELECT * FROM clients ORDER BY id');
+  return rows;
 }
 
-async function getConversationHistory(phoneNumber, clientId = 'default', limit = 5) {
-  try {
-    const result = await pool.query(
-      'SELECT message, sender, timestamp FROM messages WHERE phone_number = $1 AND client_id = $2 ORDER BY timestamp DESC LIMIT $3',
-      [phoneNumber, clientId, limit]
-    );
-    return result.rows.reverse();
-  } catch (error) {
-    console.error('Error getting conversation history:', error.message);
-    return [];
-  }
+/**
+ * Get one client by id
+ */
+async function getClientById(id) {
+  const { rows } = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+  return rows[0] || null;
 }
 
-async function addClient(clientId, businessName, whatsappNumber, aiInstructions = null, language = 'en') {
-  try {
-    await pool.query(
-      'INSERT INTO clients (client_id, business_name, whatsapp_number, ai_instructions, language) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (client_id) DO UPDATE SET business_name = $2, whatsapp_number = $3, ai_instructions = $4, language = $5',
-      [clientId, businessName, whatsappNumber, aiInstructions, language]
-    );
-    return { success: true };
-  } catch (error) {
-    console.error('Error adding client:', error.message);
-    return { success: false, error: error.message };
-  }
+/**
+ * Get default client (first row)
+ * Used if you only have one restaurant for now.
+ */
+async function getDefaultClient() {
+  const { rows } = await pool.query('SELECT * FROM clients ORDER BY id LIMIT 1');
+  return rows[0] || null;
 }
 
-async function getClient(clientId) {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM clients WHERE client_id = $1',
-      [clientId]
-    );
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error('Error getting client:', error.message);
-    return null;
-  }
+/**
+ * Map Twilio "to" number to a client (for multi-restaurant future)
+ * For now, you can ignore and just use getDefaultClient().
+ */
+async function getClientByTwilioNumber(twilioNumber) {
+  const { rows } = await pool.query(
+    'SELECT * FROM clients WHERE phone = $1 LIMIT 1',
+    [twilioNumber]
+  );
+  return rows[0] || null;
 }
 
-async function getAllClients() {
-  try {
-    const result = await pool.query('SELECT * FROM clients ORDER BY created_at DESC');
-    return result.rows;
-  } catch (error) {
-    console.error('Error getting clients:', error.message);
-    return [];
-  }
+/**
+ * Update scheduling fields for a client
+ */
+async function updateClientSchedule(id, schedule) {
+  const {
+    open_hour,
+    close_hour,
+    daily_summary_time,
+    timezone,
+    broadcast_message,
+    broadcast_time
+  } = schedule;
+
+  const { rows } = await pool.query(
+    `UPDATE clients
+     SET open_hour = COALESCE($2, open_hour),
+         close_hour = COALESCE($3, close_hour),
+         daily_summary_time = COALESCE($4, daily_summary_time),
+         timezone = COALESCE($5, timezone),
+         broadcast_message = COALESCE($6, broadcast_message),
+         broadcast_time = COALESCE($7, broadcast_time)
+     WHERE id = $1
+     RETURNING *`,
+    [id, open_hour, close_hour, daily_summary_time, timezone, broadcast_message, broadcast_time]
+  );
+
+  return rows[0] || null;
 }
 
-async function updateAnalytics(clientId, isIncoming) {
-  // Placeholder for analytics
-  return;
+/**
+ * Log every WhatsApp message for analytics
+ */
+async function logMessage({ client_id, from_number, direction, body }) {
+  await pool.query(
+    `INSERT INTO messages (client_id, from_number, direction, body)
+     VALUES ($1, $2, $3, $4)`,
+    [client_id, from_number, direction, body]
+  );
+}
+
+/**
+ * Simple daily summary (for today)
+ */
+async function getTodaySummary(client_id) {
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*)::INT AS total_messages,
+       COUNT(*) FILTER (WHERE direction = 'inbound')::INT AS inbound_count,
+       COUNT(*) FILTER (WHERE direction = 'outbound')::INT AS outbound_count
+     FROM messages
+     WHERE client_id = $1
+       AND created_at::date = CURRENT_DATE`,
+    [client_id]
+  );
+  return rows[0];
+}
+
+/**
+ * Leads = unique inbound numbers last 30 days
+ * Used for promos/broadcasts.
+ */
+async function getLeads(client_id) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT from_number AS phone
+     FROM messages
+     WHERE client_id = $1
+       AND direction = 'inbound'
+       AND created_at >= NOW() - INTERVAL '30 days'`,
+    [client_id]
+  );
+  return rows;
 }
 
 module.exports = {
   initDatabase,
-  saveMessage,
-  getConversationHistory,
-  addClient,
-  getClient,
-  getAllClients,
-  updateAnalytics
+  getClients,
+  getClientById,
+  getDefaultClient,
+  getClientByTwilioNumber,
+  updateClientSchedule,
+  logMessage,
+  getTodaySummary,
+  getLeads
 };
+
