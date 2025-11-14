@@ -1,10 +1,10 @@
 /**
- * AI MODULE - Google Gemini (Updated to v1 API + gemini-1.5-flash)
+ * AI MODULE - Google Gemini (v1 API + gemini-1.5-flash-latest)
  */
 
 const axios = require("axios");
 
-const GEMINI_MODEL = "gemini-1.5-flash";   // Latest, fast, stable
+const GEMINI_MODEL = "gemini-1.5-flash-latest";   // FIXED model name for legacy keys
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
 
 // Detect language automatically
@@ -45,19 +45,17 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
 
     console.log("🤖 Calling Google Gemini API...");
 
-    // Build message payload for Gemini (new v1 API format)
+    // Build message payload for Gemini (v1 API format)
     const contents = [
       {
         role: "user",
         parts: [
-          {
-            text: `${systemPrompt}\n\nNow respond to the user message: ${userMessage}`
-          }
+          { text: `${systemPrompt}\n\nNow respond to this message: ${userMessage}` }
         ]
       }
     ];
 
-    // Add conversation memory
+    // Add conversation history
     conversationHistory.forEach(msg => {
       contents.push({
         role: msg.sender === "user" ? "user" : "model",
