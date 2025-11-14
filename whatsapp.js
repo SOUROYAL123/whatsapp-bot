@@ -39,8 +39,17 @@ async function sendWhatsAppMessage(to, body) {
 }
 
 /**
- * Parse incoming Twilio webhook body
+ * Parse incoming Twilio webhook payload
  */
 function parseIncoming(body) {
   return {
-    from: body.From, // "whatsapp:+9
+    from: body.From, // "whatsapp:+91..."
+    to: body.To,     // Twilio sandbox: "whatsapp:+1415..."
+    body: body.Body || ''
+  };
+}
+
+module.exports = {
+  sendWhatsAppMessage,
+  parseIncoming
+};
