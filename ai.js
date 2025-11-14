@@ -4,10 +4,10 @@
 
 const axios = require("axios");
 
-const GEMINI_MODEL = "gemini-1.5-flash";   // NEW model (stable + fast)
+const GEMINI_MODEL = "gemini-1.5-flash";   // Latest, fast, stable
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
 
-// Detect language
+// Detect language automatically
 function detectLanguage(message) {
   const bengaliRegex = /[\u0980-\u09FF]/;
   return bengaliRegex.test(message) ? "bn" : "en";
@@ -15,17 +15,17 @@ function detectLanguage(message) {
 
 // System prompts
 const SYSTEM_PROMPTS = {
-  en: `You are a helpful WhatsApp assistant for {BUSINESS_NAME}. Answer questions about products and services. Keep responses short (2–3 sentences).`,
-  bn: `আপনি {BUSINESS_NAME} এর WhatsApp সহায়ক। উত্তর সংক্ষিপ্ত রাখুন (২–৩ বাক্য)।`
+  en: `You are a helpful WhatsApp assistant for {BUSINESS_NAME}. Answer questions about products and services. Keep responses short (2–3 sentences) since this is WhatsApp. Be friendly and professional.`,
+  bn: `আপনি {BUSINESS_NAME} এর WhatsApp সহায়ক। পণ্য বা সেবা সম্পর্কে সংক্ষিপ্ত (২–৩ বাক্য) উত্তর দিন। বন্ধুত্বপূর্ণ এবং পেশাদার হোন।`
 };
 
 /**
- * Get AI Response from Google Gemini (v1 API)
+ * Get AI Response from Google Gemini
  */
 async function getAIResponse(userMessage, conversationHistory = [], clientConfig = {}) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
-
+    
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY not configured");
     }
@@ -36,7 +36,6 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       process.env.BUSINESS_NAME ||
       "our business";
 
-    // Build final system prompt
     let systemPrompt =
       clientConfig.ai_instructions ||
       SYSTEM_PROMPTS[language] ||
@@ -46,33 +45,33 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
 
     console.log("🤖 Calling Google Gemini API...");
 
-    // Format messages for Gemini (new v1 structure)
+    // Build message payload for Gemini (new v1 API format)
     const contents = [
       {
         role: "user",
         parts: [
           {
-            text: `${systemPrompt}\n\nNow respond to the user: ${userMessage}`
+            text: `${systemPrompt}\n\nNow respond to the user message: ${userMessage}`
           }
         ]
       }
     ];
 
-    // Add conversation history
-    conversationHistory.forEach((msg) => {
+    // Add conversation memory
+    conversationHistory.forEach(msg => {
       contents.push({
         role: msg.sender === "user" ? "user" : "model",
         parts: [{ text: msg.message }]
       });
     });
 
-    // Add current message
+    // Add latest user message
     contents.push({
       role: "user",
       parts: [{ text: userMessage }]
     });
 
-    // Call Gemini v1
+    // Gemini API request — final corrected version
     const response = await axios.post(
       `${GEMINI_ENDPOINT}?key=${apiKey}`,
       {
@@ -84,10 +83,11 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
           maxOutputTokens: 300
         },
         safetySettings: [
-          { category: "HARM_CATEGORY_DANGEROUS", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
           { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_SEXUAL", threshold: "BLOCK_NONE" }
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
         ]
       },
       {
@@ -100,7 +100,7 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
       "I'm sorry, I couldn't generate a response.";
 
-    console.log(`✅ Gemini response: "${aiResponse.substring(0, 60)}..."`);
+    console.log(`✅ Gemini reply: "${aiResponse.substring(0, 60)}..."`);
 
     return {
       success: true,
@@ -108,13 +108,15 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
       language: language,
       provider: "gemini"
     };
+
   } catch (error) {
     console.error("❌ Gemini API Error:", error.response?.data || error.message);
 
     const language = detectLanguage(userMessage);
+
     const fallbackMessage =
       language === "bn"
-        ? "দুঃখিত, আমি এখন আপনার বার্তা প্রক্রিয়া করতে পারছি না। একটু পরে আবার চেষ্টা করুন।"
+        ? "দুঃখিত, আমি এখন আপনার বার্তা প্রক্রিয়া করতে পারছি না। কিছুক্ষণ পরে আবার চেষ্টা করুন।"
         : "Sorry, I'm having trouble right now. Please try again in a moment.";
 
     return {
@@ -126,6 +128,9 @@ async function getAIResponse(userMessage, conversationHistory = [], clientConfig
   }
 }
 
+/**
+ * Validate Gemini API Configuration
+ */
 function validateAPIConfig() {
   const configured = !!process.env.GEMINI_API_KEY;
   console.log("🔧 AI Configuration:");
