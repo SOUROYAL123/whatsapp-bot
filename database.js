@@ -1,15 +1,13 @@
 /**
- * DATABASE MODULE - PostgreSQL (FIXED)
+ * DATABASE MODULE - PostgreSQL (CLEANED FOR YOUR SCHEMA)
  */
-
-// database.js
 
 const { Pool } = require('pg');
 
 // Use your Render Postgres URL
 const connectionString =
-  process.env.DATABASE_URL || // if using DATABASE_URL
-  process.env.DB_POSTGRESDB_URL; // fallback to existing var
+  process.env.DATABASE_URL || // Render standard
+  process.env.DB_POSTGRESDB_URL; // your fallback
 
 const pool = new Pool({
   connectionString,
@@ -17,27 +15,12 @@ const pool = new Pool({
 });
 
 /**
- * Initialize database tables if they don't exist
- * Call this ONCE on server startup.
+ * Initialize database tables if they don't exist.
+ * We DO NOT re-create the clients table because it already exists
+ * and has your custom schema (client_id, whatsapp_number, etc.).
+ * We only ensure the messages table exists.
  */
 async function initDatabase() {
-  // CLIENTS TABLE: one row = one restaurant
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS clients (
-      id SERIAL PRIMARY KEY,
-      business_name VARCHAR(100) NOT NULL,
-      phone VARCHAR(30),  -- owner's WhatsApp or Twilio "to" number mapping
-      ai_instructions TEXT,
-      open_hour INTEGER DEFAULT 12,       -- 12 = 12:00
-      close_hour INTEGER DEFAULT 22,      -- 22 = 22:00
-      daily_summary_time VARCHAR(5) DEFAULT '22:30', -- "HH:MM" 24h
-      timezone VARCHAR(50) DEFAULT 'Asia/Kolkata',
-      broadcast_message TEXT,
-      broadcast_time VARCHAR(5)           -- "HH:MM" 24h
-    );
-  `);
-
-  // MESSAGES TABLE: all WhatsApp in/out for analytics
   await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
       id SERIAL PRIMARY KEY,
@@ -49,7 +32,7 @@ async function initDatabase() {
     );
   `);
 
-  console.log('🗄️  Database initialized');
+  console.log('🗄️  Database initialized (messages table ready)');
 }
 
 /**
@@ -70,7 +53,6 @@ async function getClientById(id) {
 
 /**
  * Get default client (first row)
- * Used if you only have one restaurant for now.
  */
 async function getDefaultClient() {
   const { rows } = await pool.query('SELECT * FROM clients ORDER BY id LIMIT 1');
@@ -78,12 +60,12 @@ async function getDefaultClient() {
 }
 
 /**
- * Map Twilio "to" number to a client (for multi-restaurant future)
- * For now, you can ignore and just use getDefaultClient().
+ * Map Twilio "to" number to a client.
+ * In your schema the column is `whatsapp_number`, NOT `phone`.
  */
 async function getClientByTwilioNumber(twilioNumber) {
   const { rows } = await pool.query(
-    'SELECT * FROM clients WHERE phone = $1 LIMIT 1',
+    'SELECT * FROM clients WHERE whatsapp_number = $1 LIMIT 1',
     [twilioNumber]
   );
   return rows[0] || null;
@@ -91,6 +73,7 @@ async function getClientByTwilioNumber(twilioNumber) {
 
 /**
  * Update scheduling fields for a client
+ * (open_hour, close_hour, daily_summary_time, timezone, broadcast_message, broadcast_time)
  */
 async function updateClientSchedule(id, schedule) {
   const {
@@ -104,12 +87,12 @@ async function updateClientSchedule(id, schedule) {
 
   const { rows } = await pool.query(
     `UPDATE clients
-     SET open_hour = COALESCE($2, open_hour),
-         close_hour = COALESCE($3, close_hour),
+     SET open_hour         = COALESCE($2, open_hour),
+         close_hour        = COALESCE($3, close_hour),
          daily_summary_time = COALESCE($4, daily_summary_time),
-         timezone = COALESCE($5, timezone),
+         timezone          = COALESCE($5, timezone),
          broadcast_message = COALESCE($6, broadcast_message),
-         broadcast_time = COALESCE($7, broadcast_time)
+         broadcast_time    = COALESCE($7, broadcast_time)
      WHERE id = $1
      RETURNING *`,
     [id, open_hour, close_hour, daily_summary_time, timezone, broadcast_message, broadcast_time]
@@ -173,4 +156,3 @@ module.exports = {
   getTodaySummary,
   getLeads
 };
-

@@ -12,25 +12,25 @@ const { sendWhatsAppMessage } = require('./whatsapp');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Twilio sends form-encoded body
+// Twilio sends form-encoded payload
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// Simple home page
+// Home page
 app.get('/', (req, res) => {
   res.send('WhatsApp AI Bot is running');
 });
 
-// Webhook route
+// Twilio webhook
 app.post('/webhook', handleWhatsAppWebhook);
 
-// Admin API: list clients
+// Admin: list clients
 app.get('/api/clients', async (req, res) => {
   const clients = await db.getClients();
   res.json(clients);
 });
 
-// Admin API: update schedule for one client
+// Admin: update schedule for a client
 app.put('/api/clients/:id/schedule', express.json(), async (req, res) => {
   const id = Number(req.params.id);
   const updated = await db.updateClientSchedule(id, req.body);
@@ -38,24 +38,24 @@ app.put('/api/clients/:id/schedule', express.json(), async (req, res) => {
   res.json(updated);
 });
 
-// Initialize DB then start server
+// Start server
 (async () => {
   await db.initDatabase();
 
   app.listen(PORT, () => {
     console.log('═══════════════════════════════════════');
     console.log(`🌐 Port: ${PORT}`);
-    console.log('📱 Webhook: /webhook');
-    console.log('⚙️  Admin: /api/clients');
+    console.log('📱 Webhook: POST /webhook');
+    console.log('⚙️  Admin API: /api/clients');
     console.log('═══════════════════════════════════════');
-    console.log('💚 Ready for WhatsApp messages!');
+    console.log('💚 READY FOR WHATSAPP MESSAGES');
   });
 })();
 
-// ─────────────────────────────────────────
-// CRON JOB #1 – Daily summary per client
-// Runs every 5 minutes and checks times.
-// ─────────────────────────────────────────
+// ─────────────────────────────────────────────
+// CRON JOB #1 – Daily summary scheduler
+// Checks every 5 minutes
+// ─────────────────────────────────────────────
 cron.schedule('*/5 * * * *', async () => {
   try {
     const clients = await db.getClients();
@@ -71,9 +71,7 @@ cron.schedule('*/5 * * * *', async () => {
         timeZone: client.timezone || 'Asia/Kolkata'
       });
 
-      const targetStr = client.daily_summary_time; // "HH:MM"
-
-      if (nowStr === targetStr) {
+      if (nowStr === client.daily_summary_time) {
         const summary = await db.getTodaySummary(client.id);
 
         const text =
@@ -82,8 +80,9 @@ cron.schedule('*/5 * * * *', async () => {
           `• Inbound: ${summary.inbound_count}\n` +
           `• Outbound: ${summary.outbound_count}`;
 
-        if (client.phone) {
-          await sendWhatsAppMessage(client.phone, text);
+        // Send daily summary to restaurant owner
+        if (client.whatsapp_number) {
+          await sendWhatsAppMessage(client.whatsapp_number, text);
           console.log(`📊 Sent daily summary to ${client.business_name}`);
         }
       }
@@ -93,9 +92,9 @@ cron.schedule('*/5 * * * *', async () => {
   }
 });
 
-// ─────────────────────────────────────────
-// CRON JOB #2 – Broadcast / promotions
-// ─────────────────────────────────────────
+// ─────────────────────────────────────────────
+// CRON JOB #2 – Broadcast / Promotional Messages
+// ─────────────────────────────────────────────
 cron.schedule('*/5 * * * *', async () => {
   try {
     const clients = await db.getClients();
